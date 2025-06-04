@@ -85,6 +85,11 @@ struct User {
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 struct Login {
+    data: LoginData,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+struct LoginData {
     account: String,
     token: String,
     avatar: String,
@@ -105,9 +110,11 @@ async fn login(
     }
 
     Ok(Json(Login {
-        account: "root".to_string(),
-        token: "123".to_string(),
-        avatar: "".to_string(),
+        data: LoginData {
+            account: "root".to_string(),
+            token: "123".to_string(),
+            avatar: "".to_string(),
+        },
     }))
 }
 
