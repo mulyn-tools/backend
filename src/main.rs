@@ -46,17 +46,19 @@ async fn main() {
 
     let local_url = std::env::var("LOCAL_URL").expect("LOCAL_URL is not set");
     let secret = std::env::var("SECRET").expect("SECRET is not set");
+    let password = std::env::var("PASSWORD").expect("PASSWORD is not set");
 
     let app = Router::new()
         .route("/playlist", get(playlist))
         .route("/edit", post(edit))
+        .route("/login", post(login))
         .layer(
             CorsLayer::new()
                 .allow_origin(Any)
                 .allow_headers(Any)
                 .allow_methods([Method::GET, Method::POST]),
         )
-        .with_state(secret);
+        .with_state((secret, password));
     let listener = tokio::net::TcpListener::bind(local_url).await.unwrap();
     axum::serve(listener, app).await.unwrap();
 }
@@ -73,6 +75,29 @@ struct PlayListEntry {
     name: String,
     author: String,
     note: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+struct User {
+    account: String,
+    password: String,
+}
+
+async fn login(
+    State((_, p)): State<(String, String)>,
+    Json(user): Json<User>,
+) -> Result<impl IntoResponse, AnyhowError> {
+    let User { account, password } = user;
+
+    if account != "root" {
+        return Err(anyhow!("User does not exist").into());
+    }
+
+    if password != p {
+        return Err(anyhow!("User does not exist").into());
+    }
+
+    Ok(())
 }
 
 async fn playlist(Query(query): Query<PlayListQuery>) -> Result<impl IntoResponse, AnyhowError> {
@@ -125,14 +150,14 @@ async fn playlist(Query(query): Query<PlayListQuery>) -> Result<impl IntoRespons
 }
 
 async fn edit(
-    State(s): State<String>,
+    State((secret, _)): State<(String, String)>,
     headers: HeaderMap,
     Json(json): Json<Vec<PlayListEntry>>,
 ) -> Result<impl IntoResponse, AnyhowError> {
     if headers
         .get("secret")
         .and_then(|s| s.to_str().ok())
-        .is_none_or(|sec| sec != s)
+        .is_none_or(|sec| sec != secret)
     {
         return Err(anyhow!("SECRET no match").into());
     }
