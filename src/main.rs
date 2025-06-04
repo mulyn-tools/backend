@@ -83,6 +83,13 @@ struct User {
     password: String,
 }
 
+#[derive(Debug, Deserialize, Serialize, Clone)]
+struct Login {
+    account: String,
+    token: String,
+    avatar: String,
+}
+
 async fn login(
     State((_, p)): State<(String, String)>,
     Json(user): Json<User>,
@@ -97,7 +104,11 @@ async fn login(
         return Err(anyhow!("User does not exist").into());
     }
 
-    Ok(())
+    Ok(Json(Login {
+        account: "root".to_string(),
+        token: "123".to_string(),
+        avatar: "".to_string(),
+    }))
 }
 
 async fn playlist(Query(query): Query<PlayListQuery>) -> Result<impl IntoResponse, AnyhowError> {
