@@ -5,6 +5,7 @@ use axum::http::{HeaderMap, Method, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::post;
 use axum::{Router, routing::get};
+use rand::{Rng, distr, rng};
 use serde::{Deserialize, Serialize};
 use tower_http::cors::{Any, CorsLayer};
 use tracing::error;
@@ -109,10 +110,16 @@ async fn login(
         return Err(anyhow!("User does not exist").into());
     }
 
+    let rng = rng();
+
     Ok(Json(Login {
         data: LoginData {
             account: "root".to_string(),
-            token: "123".to_string(),
+            token: rng
+                .sample_iter(&distr::Alphabetic)
+                .take(128)
+                .map(char::from)
+                .collect(),
             avatar: "".to_string(),
         },
     }))
