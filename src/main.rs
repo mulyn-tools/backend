@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use anyhow::anyhow;
 use axum::Json;
 use axum::extract::{Query, State};
@@ -7,6 +9,7 @@ use axum::routing::post;
 use axum::{Router, routing::get};
 use rand::{Rng, distr, rng};
 use serde::{Deserialize, Serialize};
+use tokio::sync::RwLock;
 use tower_http::cors::{Any, CorsLayer};
 use tracing::error;
 use tracing_subscriber::{EnvFilter, Layer, fmt, layer::SubscriberExt, util::SubscriberInitExt};
@@ -30,6 +33,13 @@ where
     }
 }
 
+#[derive(Debug, Clone)]
+struct BackendState {
+    list: Arc<RwLock<Vec<PlayListEntry>>>,
+    secret: String,
+    password: String,
+}
+
 #[tokio::main]
 async fn main() {
     dotenvy::dotenv().ok();
@@ -49,6 +59,12 @@ async fn main() {
     let secret = std::env::var("SECRET").expect("SECRET is not set");
     let password = std::env::var("PASSWORD").expect("PASSWORD is not set");
 
+    let f = tokio::fs::read_to_string("./playlist.json")
+        .await
+        .unwrap_or_else(|_| "".to_string());
+
+    let list: Vec<PlayListEntry> = serde_json::from_str(&f).unwrap_or_default();
+
     let app = Router::new()
         .route("/playlist", get(playlist))
         .route("/edit", post(edit))
@@ -59,7 +75,11 @@ async fn main() {
                 .allow_headers(Any)
                 .allow_methods([Method::GET, Method::POST]),
         )
-        .with_state((secret, password));
+        .with_state(BackendState {
+            list: Arc::new(RwLock::new(list)),
+            secret,
+            password,
+        });
     let listener = tokio::net::TcpListener::bind(local_url).await.unwrap();
     axum::serve(listener, app).await.unwrap();
 }
@@ -97,7 +117,7 @@ struct LoginData {
 }
 
 async fn login(
-    State((_, p)): State<(String, String)>,
+    State(BackendState { password: p, .. }): State<BackendState>,
     Json(user): Json<User>,
 ) -> Result<impl IntoResponse, AnyhowError> {
     let User { account, password } = user;
@@ -114,7 +134,7 @@ async fn login(
 
     Ok(Json(Login {
         data: LoginData {
-            account: "root".to_string(),
+            account,
             token: rng
                 .sample_iter(&distr::Alphabetic)
                 .take(128)
@@ -125,10 +145,10 @@ async fn login(
     }))
 }
 
-async fn playlist(Query(query): Query<PlayListQuery>) -> Result<impl IntoResponse, AnyhowError> {
-    let f = tokio::fs::read_to_string("./playlist.json").await?;
-    let db: Vec<PlayListEntry> = serde_json::from_str(&f)?;
-
+async fn playlist(
+    State(BackendState { list, .. }): State<BackendState>,
+    Query(query): Query<PlayListQuery>,
+) -> Result<impl IntoResponse, AnyhowError> {
     let mut res = vec![];
 
     let PlayListQuery {
@@ -139,8 +159,10 @@ async fn playlist(Query(query): Query<PlayListQuery>) -> Result<impl IntoRespons
 
     let mut filter_mode = false;
 
+    let list = list.read().await;
+
     if let Some(song_name) = song_name {
-        let filter = db
+        let filter = list
             .iter()
             .filter(|e| e.name.contains(&song_name))
             .map(|x| x.to_owned());
@@ -149,7 +171,7 @@ async fn playlist(Query(query): Query<PlayListQuery>) -> Result<impl IntoRespons
     }
 
     if let Some(author) = author {
-        let filter = db
+        let filter = list
             .iter()
             .filter(|e| e.author.contains(&author))
             .map(|x| x.to_owned());
@@ -158,7 +180,7 @@ async fn playlist(Query(query): Query<PlayListQuery>) -> Result<impl IntoRespons
     }
 
     if let Some(note) = note {
-        let filter = db
+        let filter = list
             .iter()
             .filter(|e| e.note.as_ref().is_some_and(|n| n.contains(&note)))
             .map(|x| x.to_owned());
@@ -168,14 +190,14 @@ async fn playlist(Query(query): Query<PlayListQuery>) -> Result<impl IntoRespons
     }
 
     if !filter_mode {
-        res = db;
+        res = list.to_vec();
     }
 
     Ok(Json(res))
 }
 
 async fn edit(
-    State((secret, _)): State<(String, String)>,
+    State(BackendState { secret, list, .. }): State<BackendState>,
     headers: HeaderMap,
     Json(json): Json<Vec<PlayListEntry>>,
 ) -> Result<impl IntoResponse, AnyhowError> {
@@ -187,6 +209,20 @@ async fn edit(
         return Err(anyhow!("SECRET no match").into());
     }
 
+    let jc = json.clone();
+    tokio::spawn(async move {
+        if let Err(e) = write_playlist(jc).await {
+            error!("Write playlist failed: {}", e);
+        }
+    });
+
+    let mut w = list.write().await;
+    *w = json;
+
+    Ok(())
+}
+
+async fn write_playlist(json: Vec<PlayListEntry>) -> anyhow::Result<()> {
     let f = serde_json::to_string(&json)?;
     tokio::fs::write("./playlist.json", f).await?;
 
