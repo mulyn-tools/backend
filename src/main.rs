@@ -209,22 +209,11 @@ async fn edit(
         return Err(anyhow!("SECRET no match").into());
     }
 
-    let jc = json.clone();
-    tokio::spawn(async move {
-        if let Err(e) = write_playlist(jc).await {
-            error!("Write playlist failed: {}", e);
-        }
-    });
+    let f = serde_json::to_string(&json)?;
+    tokio::fs::write("./playlist.json", f).await?;
 
     let mut w = list.write().await;
     *w = json;
-
-    Ok(())
-}
-
-async fn write_playlist(json: Vec<PlayListEntry>) -> anyhow::Result<()> {
-    let f = serde_json::to_string(&json)?;
-    tokio::fs::write("./playlist.json", f).await?;
 
     Ok(())
 }
